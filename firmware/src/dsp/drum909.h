@@ -38,6 +38,7 @@ typedef struct {
     d9_biquad_t click_lp, noise_hpf, noise_lpf, dc_block;
     int32_t noise_hold, noise_gated, amp_hold_left, bd_phold, impulse, mute;
     int32_t click_stale, click_warm;   /* skipped click filter: see d9_render_bd */
+    int32_t quiet;                     /* SD: silent until its next trigger (d9_render_sd) */
     float bd_df, bd_mult, bd_base, out_gain;
     float crush_st[2];
 } d9_bt_t;

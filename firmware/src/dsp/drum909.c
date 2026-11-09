@@ -393,6 +393,7 @@ static void d9_bt_trigger(d9_bt_t *v, int bd, float accent)
         v->noise_gated = 0;
     }
     v->impulse = 2;
+    v->quiet = 0;
     v->out_gain = v->level * accent;
     const float longest = v->decay > v->noise_decay ? v->decay : v->noise_decay;
     v->mute = d9_ceil((longest + 20.0f) * D9_MS);
@@ -508,11 +509,16 @@ typedef struct {
     float srev, sdly;
     float *dry_r, pl, pr;     /* X0X stereo: dry_r 0 = mono (dry gets y as 9W9's) */
     float dpl, dpr;           /* the pans' glide per sample this block (0 settled) */
+    float spl, spr;           /* settled: the pans' gains for the whole block */
+    int settled;
 } d9_bus_t;
 
 static inline void d9_emit(const d9_bus_t *b, int i, float y)
 {
-    if (b->dry_r) {
+    if (b->dry_r && b->settled) {             /* (dpl a zero: pl + dpl * i is pl + dpl, its sign too) */
+        b->dry[i] += y * b->spl;
+        b->dry_r[i] += y * b->spr;
+    } else if (b->dry_r) {
         b->dry[i] += y * (b->pl + b->dpl * (float)i);
         b->dry_r[i] += y * (b->pr + b->dpr * (float)i);
     } else
@@ -586,6 +592,8 @@ static void d9_render_sd(d9_bt_t *v, const float *nz, const d9_bus_t *bus, int n
 {
     const int m = n < v->mute ? n : v->mute;
     v->mute -= m;
+    if (v->quiet)                        /* silent until the next trigger: see below */
+        return;
     d9_env_anchor(&v->pitch);
     d9_env_anchor(&v->amp);
     d9_env_anchor(&v->noise_env);
@@ -595,6 +603,12 @@ static void d9_render_sd(d9_bt_t *v, const float *nz, const d9_bus_t *bus, int n
         const float f = d9_env_tick(&v->pitch);
         float amp = d9_env_tick(&v->amp);
         amp = amp > D9_VCA_VT ? (amp - D9_VCA_VT) * D9_VCA_NORM : 0.0f;
+        /* under the VCA's threshold with the noise gated, the rest of the note is exact zeros (the amp only falls,
+         * the gate holds until a trigger resets it all); not with the bitcrusher (type 6), whose state carries over */
+        if (amp == 0.0f && (v->snappy <= 0.0f || v->noise_gated) && v->shape.type != 6) {
+            v->quiet = 1;
+            break;
+        }
 
         v->ph += d9_inc(f);
         v->ph2 += d9_inc(f * ratio);
@@ -782,6 +796,9 @@ static inline void d9_bus(d9_bus_t *b, drum909_t *d, int voice, float *dry, floa
     b->pr = d9_pr0[voice];
     b->dpl = d->pan_dl[voice];
     b->dpr = d->pan_dr[voice];
+    b->settled = b->dpl == 0.0f && b->dpr == 0.0f;
+    b->spl = b->pl + b->dpl;
+    b->spr = b->pr + b->dpr;
     b->srev = d->send_rev[voice];
     b->sdly = d->send_dly[voice];
     b->rev = b->srev != 0.0f ? rev : 0;
